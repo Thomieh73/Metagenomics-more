@@ -5,3 +5,4 @@ With this repository I want to provide information on metagenomic data analysis.
 ## Topics
 
 * [How to analyze an Amplicon dataset? ](Analysis_of_an_Amplicon_dataset.md)
+* [An R-script to process the output from Kraken](Kraken_output_script_R.md)
