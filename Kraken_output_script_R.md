@@ -2,7 +2,7 @@
 
 For one of my projects I analyzed the output from the Kraken classification for a set of metagenomic sequences.
 
- The kraken output files were generated using the command kraken_report. I then wanted to combine the files in R, so that I could start comparing the samples. Below you find the script that I made.
+ The kraken output files were generated using the command kraken_report. I then wanted to combine the files in R, so that I could start comparing the samples. Below you find the script that I made. The second bit of the script is a small analysis example.
  
  You find the script file here: [combine kraken output files.R](R-script/combine_kraken_output_files.R)
  
