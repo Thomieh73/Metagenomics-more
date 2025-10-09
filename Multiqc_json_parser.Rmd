@@ -1,0 +1,329 @@
+---
+title: "MAG Quality control overview."
+author: "Thomas Haverkamp"
+date: "2025-10-06"
+output: html_document
+---
+
+```{r setup, include=TRUE, echo=FALSE, warning=FALSE,message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+## loading packages
+library(jsonlite)
+library(tidyverse)
+library(DT)
+
+## setting working directory:
+setwd("../r-scripts/")
+
+## the path to the multiqc json file
+json_file_path <- "../results/multiqc/20250915_qc_run_multiqc_report_data/multiqc_data.json"
+
+```
+
+```{r import_data, include=TRUE, echo=FALSE}
+
+## import the json multiqc data file
+multiqc_data <- fromJSON(json_file_path)
+
+## import the metadata file
+metadata <- read.delim("../results/metadata/teicon_mgs_metadata.tsv",
+                       head=TRUE,
+                       sep="\t")
+
+## creating a table from the Metadata
+datatable(metadata,
+          caption = "Table 1. Metadata file of 100 samples for the TEICON project. This is an interactive table",
+            options = list(pageLength = 10, 
+                           scrollX = TRUE,
+                           dom = 'Bfrtip',
+                           buttons = c('copy', 'csv', 'excel', 'pdf', 'print')),
+            rownames = FALSE)
+
+```
+
+
+```{r create_tables, include=TRUE, echo=FALSE}
+# Extract and tidy the data
+
+#Extract the fastqc from the raw data from JSON
+fastqc_raw_data_list <- multiqc_data$report_general_stats_data$fastqc
+
+#Extract the fastp from the filtered data from JSON
+fastp_data_list <- multiqc_data$report_general_stats_data$fastp
+
+#Extract the fastp from the filtered data from JSON
+fastqc_filt_data_list <- multiqc_data$report_general_stats_data$`fastqc-1`
+
+#Extract the bowtie2 host filtering data from the filtered data from JSON
+bowtie2_host_data_list <- multiqc_data$report_general_stats_data$`bowtie2-1`
+
+#Extract the bowtie2 Phix filtering data from the filtered data from JSON
+bowtie2_phix_data_list <- multiqc_data$report_general_stats_data$bowtie2
+
+
+
+```
+
+
+```{r process_list_files, include=TRUE, echo=FALSE}
+# Process the FastQC data:
+# - Create a dataframe from the list
+# - Create a clean 'sample' name by removing the '_raw_1' or '_raw_2' suffix
+# - Group by the clean sample name and sum the reads from the paired-end files
+fastqc_raw_df <- map_dfr(fastqc_raw_data_list, ~tibble(
+    total_sequences = .x$total_sequences
+  ), .id = "filename") %>%
+  mutate(sample = str_remove(filename, "_raw_[12]$")) %>%
+  group_by(sample) %>%
+  summarise(reads_before_qc = sum(total_sequences/2, na.rm = TRUE))
+
+
+# Process the fastp data. The sample names are already clean.
+fastp_df <- map_dfr(fastp_data_list, ~tibble(
+    # The number of reads that passed all filters
+    reads_after_fastp = (.x$filtering_result_passed_filter_reads/2)
+  ), .id = "sample")
+
+
+# Process the fastqc_filt data. The sample names are already clean.
+fastqc_filt_df <- map_dfr(fastqc_filt_data_list, ~tibble(
+    total_sequences = .x$total_sequences
+  ), .id = "filename") %>%
+  mutate(sample = str_remove(filename, "_trimmed_[12]$")) %>%
+  group_by(sample) %>%
+  summarise(final_reads = sum(total_sequences/2, na.rm = TRUE))
+
+# Process the bowtie2 host data. The sample names are already clean.
+bowtie2_host_df <- map_dfr(bowtie2_host_data_list, ~tibble(
+    total_sequences = (.x$paired_aligned_none )
+  ), .id = "filename") %>%
+  mutate(sample = filename) %>%
+  group_by(sample) %>%
+  summarise(reads_after_host = sum(total_sequences, na.rm = TRUE))
+
+# Process the bowtie2 host data. The sample names are already clean.
+bowtie2_phix_df <- map_dfr(bowtie2_phix_data_list, ~tibble(
+    total_sequences = .x$paired_aligned_none
+  ), .id = "filename") %>%
+  mutate(sample = filename) %>%
+  group_by(sample) %>%
+  summarise(reads_after_phix = sum(total_sequences, na.rm = TRUE))
+
+# Join the different data frames by the sample id, first create a list of dataframes
+df_list <- list(fastqc_raw_df, fastp_df, bowtie2_host_df, bowtie2_phix_df, fastqc_filt_df)
+
+# use the reduce function to sequenctially join the dataframes from the df_list
+final_read_counts_df <- reduce(df_list, left_join, by ="sample") %>%
+  mutate(sample = str_remove(sample, "_run0")) 
+
+## add colums, to indicate reads removed
+final_read_counts_df$fastp_removed <- final_read_counts_df$reads_before_qc - final_read_counts_df$reads_after_fastp
+final_read_counts_df$host_removed <- final_read_counts_df$reads_after_fastp - final_read_counts_df$reads_after_host
+final_read_counts_df$phix_removed <- final_read_counts_df$reads_after_host - final_read_counts_df$reads_after_phix
+final_read_counts_df$perc_removed <- ((final_read_counts_df$reads_before_qc- final_read_counts_df$final_reads)/final_read_counts_df$reads_before_qc)*100
+
+# creating a table from the readcounts
+## creating a table from the Metadata
+datatable(final_read_counts_df,
+          caption = "Table 2. Read counts for the different QC steps from the MAG pipeline with the  100 samples for the TEICON project. This is an interactive table",
+            options = list(pageLength = 10, 
+                           scrollX = TRUE,
+                           dom = 'Bfrtip',
+                           buttons = c('copy', 'csv', 'excel', 'pdf', 'print')),
+            rownames = FALSE)
+
+
+```
+
+```{r summary_stats, include=TRUE, echo=FALSE, eval=TRUE, warning= FALSE}
+## making a table with the averages as input, and as final reads
+summary_stats <- final_read_counts_df %>%
+  summarise(across(c(reads_before_qc, reads_after_fastp, reads_after_host, reads_after_phix, final_reads, perc_removed),
+                   list(average = ~mean(., na.rm = TRUE),
+                        median = ~median(., na.rm =TRUE),
+                        st.dev = ~sd(., na.rm = TRUE))))%>%
+pivot_longer(everything(), 
+                      names_to = c("variable", ".value"), 
+                      names_pattern = "(.*)_(average|median|st.dev)") %>%
+  mutate(across(c(average,median, st.dev), ~round(., 1)))
+
+knitr::kable(summary_stats, "simple", align = "lcc")
+
+```
+
+
+Using the above two tables we can show figures with the differences per QC step for the 100 teicon samples.
+
+```{r Boxplot_samples, include=TRUE, echo=FALSE}
+
+##Normal numbers
+options(scipen=999)
+
+
+# first I merge the two table metadata and the final_read_counts_df. and I make it a long table
+
+teicon_qc <- left_join(final_read_counts_df, metadata, by ="sample") %>%
+  select(sample,
+         reads_before_qc,
+         reads_after_fastp,
+         reads_after_host,
+         reads_after_phix,
+         final_reads,
+         Host,
+         Sampletype) %>%
+  pivot_longer(
+    cols = c(reads_before_qc, reads_after_fastp, reads_after_host, reads_after_phix, final_reads),
+            names_to="variable",
+            values_to="value" )
+
+## variable needs to be orders
+teicon_qc$variable <- factor(teicon_qc$variable,
+                                levels=c("reads_before_qc",
+                                         "reads_after_fastp",
+                                         "reads_after_host",
+                                         "reads_after_phix",
+                                         "final_reads"))
+
+
+## plot boxplot with ggplot for Hubbard
+p <- teicon_qc %>%
+  filter(Host == "Hubbard") %>%
+  ggplot( aes(x=variable, y=(value/1000000))) + 
+  geom_violin()+
+  geom_jitter(alpha=0.5, size=2.2, aes(color=Host))+
+  xlab("Quality control step")+
+  ylab("Million PE-reads (n)")+
+  labs(fill = "Quality control step")+
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) 
+# sets the x-axis labels in a way to be readable
+
+p
+
+## plot boxplot with ggplot for Ross
+p <- teicon_qc %>%
+  filter(Host == "Ross 308") %>%
+  ggplot( aes(x=variable, y=(value/1000000))) + 
+  geom_violin()+
+  geom_jitter(alpha=0.5, size=2.2, aes(color=Host))+
+  xlab("Quality control step")+
+  ylab("Million PE-reads (n)")+
+  labs(fill = "Quality control step")+
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) 
+# sets the x-axis labels in a way to be readable
+
+p
+
+
+## plot boxplot with ggplot for Kalkun
+p <- teicon_qc %>%
+  filter(Host == "Kalkun") %>%
+  ggplot( aes(x=variable, y=(value/1000000))) + 
+  geom_violin()+
+  geom_jitter(alpha=0.5, size=2.2, aes(color=Host))+
+  xlab("Quality control step")+
+  ylab("Million PE-reads (n)")+
+  labs(fill = "Quality control step")+
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) 
+# sets the x-axis labels in a way to be readable
+
+p
+
+## plot boxplot with ggplot for controls
+p <- teicon_qc %>%
+  filter(Host == "N/A") %>%
+  ggplot( aes(x=variable, y=(value))) + 
+  geom_violin()+
+  geom_jitter(alpha=0.5, size=2.2, aes(color=Host))+
+  xlab("Quality control step")+
+  ylab("PE-reads (n)")+
+  labs(fill = "Quality control step")+
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) 
+# sets the x-axis labels in a way to be readable
+
+p
+
+
+```
+
+
+
+```{r Plot_removed, include=TRUE, echo=FALSE, warning=FALSE,message=FALSE}
+#create_the table
+teicon_qc <- left_join(final_read_counts_df, metadata, by ="sample") %>%
+  select(sample,
+         reads_before_qc,
+         reads_after_fastp,
+         reads_after_host,
+         reads_after_phix,
+         final_reads,
+         fastp_removed,
+         host_removed,
+         phix_removed,
+         Host,
+         Sampletype)
+
+ggplot(teicon_qc, aes(x=reads_before_qc, y=final_reads, colour = Host)) +
+  geom_point(alpha=0.5, size=2.2)+
+  stat_ellipse(aes(group=Host), type="norm", level=0.95, linetype="solid", linewidth=0.5, alpha=0.5)+
+  xlab("input reads")+
+  ylab("clean reads")+
+  labs(colour = "Host")+
+  geom_hline(yintercept=(mean(teicon_qc$value)),
+             color="black", 
+             linetype='dashed')
+
+
+```
+
+``` {r plot_fastP_removed_reads, echo=FALSE, warning=FALSE,message=FALSE}
+
+ggplot(teicon_qc, aes(x=reads_before_qc, y=fastp_removed, colour = Host)) +
+  geom_point(alpha=0.5, size=2.2)+
+  stat_ellipse(aes(group=Host), type="norm", level=0.95, linetype="solid", size=0.5, alpha=0.5)+
+  xlab("input reads")+
+  ylab("fastP removed reads")+
+  labs(colour = "Host")
+
+
+```
+``` {r plot_host_removed_reads_2, echo=FALSE, warning=FALSE,message=FALSE}
+
+## calculate percentage removed of all reads
+teicon_qc$perc_removed <- ((teicon_qc$reads_before_qc-teicon_qc$final_reads)/teicon_qc$reads_before_qc)*100
+
+
+ggplot(teicon_qc, aes(x=reads_before_qc, y=perc_removed, colour = Host)) +
+  geom_point(alpha=0.5, size=2.2)+
+  stat_ellipse(aes(group=Host), type="norm", level=0.95, linetype="solid", size=0.5, alpha=0.5)+
+  xlab("input reads")+
+  ylab("Percentage reads removed")+
+  ylim(0,20)+
+  labs(colour = "Host")+
+  ggtitle("MAG QC percentage of removed reads.")
+
+
+
+```
+``` {r plot_host_removed_reads, echo=FALSE,warning=FALSE,message=FALSE }
+
+## calculate percentage removed of all reads
+teicon_qc$perc_removed <- ((teicon_qc$reads_before_qc-teicon_qc$final_reads)/teicon_qc$reads_before_qc)*100
+
+
+
+
+p <- teicon_qc %>%
+  filter(Host != "N/A") %>% 
+  ggplot(aes(x=(reads_before_qc/1000000), y=perc_removed, colour = Host)) +
+  geom_point(alpha=0.5, size=2.2)+
+  stat_ellipse(aes(group=Host), type="norm", level=0.95, linetype="solid", size=0.5, alpha=0.5)+
+  xlab("input reads")+
+  ylab("Percentage reads removed")+
+  #ylim(0,)+
+  labs(colour = "Host")+
+  ggtitle("MAG QC percentage of removed reads, without control samples")
+
+p
+
+```
