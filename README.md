@@ -6,3 +6,4 @@ With this repository I want to provide information on metagenomic data analysis.
 
 * [How to analyze an Amplicon dataset? ](Analysis_of_an_Amplicon_dataset.md)
 * [An R-script to process the output from Kraken](Kraken_output_script_R.md)
+* [An R markdown script to process the multiqc output](multiqc_outout_parser.md)
